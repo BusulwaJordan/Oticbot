@@ -69,8 +69,13 @@ const ChatInterface = () => {
         const botMsgId = Date.now() + 1;
         setMessages(prev => [...prev, { id: botMsgId, text: '', sender: 'bot' }]);
 
+        // Use deployed backend in production, localhost in development
+        const BACKEND_URL = import.meta.env.PROD
+            ? 'https://jordanbless-otic-backend.hf.space/chat'
+            : 'http://localhost:8000/chat';
+
         try {
-            const response = await fetch('http://localhost:8000/chat', {
+            const response = await fetch(BACKEND_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: userMsg.text })
