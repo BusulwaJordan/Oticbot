@@ -184,6 +184,19 @@ def truncate_response(text: str, max_length: int = MAX_RESPONSE_LENGTH) -> str:
 # CHAT ENDPOINT WITH GUARDRAILS
 # ============================================
 
+# ============================================
+# CHAT ENDPOINT WITH MEMORY & GUARDRAILS
+# ============================================
+
+# In-memory history store: session_id -> list of messages
+# Format: {"role": "user/assistant", "content": "..."}
+conversation_history = defaultdict(list)
+MAX_HISTORY_MESSAGES = 10  # Keep last 10 messages (5 turns)
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str = "default"  # Optional session ID for memory
+
 @app.post("/chat")
 async def chat(request: ChatRequest, req: Request):
     # Get client IP for rate limiting
@@ -204,42 +217,49 @@ async def chat(request: ChatRequest, req: Request):
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse("Please type a message to get started! Ask me anything about the Otic Foundation. 😊")
     
+    # MEMORY: Retrieve and update history
+    session_id = request.session_id
+    history = conversation_history[session_id]
+    
+    # Append user message
+    history.append({"role": "user", "content": request.message})
+    
+    # Trim history if too long
+    if len(history) > MAX_HISTORY_MESSAGES:
+        history = history[-MAX_HISTORY_MESSAGES:]
+        conversation_history[session_id] = history
+
     async def generate():
         try:
-            response_text = ""
+            full_response = ""
+            
+            # Construct messages with system prompt + history
+            messages = [{"role": "system", "content": OTIC_CONTEXT}] + history
+            
             stream = client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": OTIC_CONTEXT
-                    },
-                    {
-                        "role": "user",
-                        "content": request.message
-                    }
-                ],
+                messages=messages,
                 model="llama-3.3-70b-versatile",
                 stream=True,
-                max_tokens=500,  # Limit tokens at API level
+                max_tokens=1024,  # Increased from 500 to flow better
+                temperature=0.7,
             )
 
             for chunk in stream:
+                # CHECK FOR DISCONNECT (Stop generating if user leaves)
+                if await req.is_disconnected():
+                    break
+                    
                 if chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
-                    response_text += content
-                    
-                    # GUARDRAIL 4: Stop if response too long
-                    if len(response_text) > MAX_RESPONSE_LENGTH:
-                        # Find a good stopping point
-                        remaining = MAX_RESPONSE_LENGTH - (len(response_text) - len(content))
-                        if remaining > 0:
-                            yield content[:remaining] + "..."
-                        break
-                    
+                    full_response += content
                     yield content
 
+            # Memory: Append assistant response after generation
+            if full_response:
+                conversation_history[session_id].append({"role": "assistant", "content": full_response})
+
         except Exception as e:
-            yield f"I'm having trouble responding right now. Please try again in a moment."
+            yield f"I'm having trouble responding right now. Please try again. (Error: {str(e)})"
 
     from fastapi.responses import StreamingResponse
     return StreamingResponse(generate(), media_type="text/plain")
