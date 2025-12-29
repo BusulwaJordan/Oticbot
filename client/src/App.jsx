@@ -1,46 +1,63 @@
-import React from 'react'
+import React, { useState } from 'react'
 import ChatInterface from './components/ChatInterface'
+import InfoPanel from './components/InfoPanel'
+import { X } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 
 function App() {
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-100 via-sky-50 to-emerald-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-5xl h-[85vh] flex flex-col md:flex-row gap-6">
+    // Mobile: h-screen, p-0. Desktop: min-h-screen, p-4
+    <div className="h-screen md:min-h-screen bg-gradient-to-br from-indigo-100 via-sky-50 to-emerald-50 flex items-center justify-center p-0 md:p-4">
 
-        {/* Sidebar / Info Panel */}
-        <div className="hidden md:flex flex-col justify-between w-1/3 glass rounded-3xl p-8 text-slate-800">
-          <div>
-            <div className="flex items-center gap-3 mb-8">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-sky-500 to-emerald-400 flex items-center justify-center text-white font-bold text-xl">
-                O
-              </div>
-              <h1 className="text-2xl font-bold tracking-tight">Otic Foundation</h1>
-            </div>
+      {/* Mobile: h-full, rounded-none. Desktop: h-[85vh], rounded-3xl */}
+      <div className="w-full max-w-5xl h-full md:h-[85vh] flex flex-col md:flex-row gap-6 relative">
 
-            <p className="text-slate-600 mb-6 leading-relaxed">
-              Empowering Uganda through Artificial Intelligence.
-              Ask me about our skilling initiatives, the AI in Every City campaign, or how we are shaping the future of work.
-            </p>
-
-            <div className="space-y-4">
-              <div className="p-4 rounded-2xl bg-sky-50 border border-sky-100">
-                <h3 className="font-semibold text-sky-800 text-sm mb-1">Mission</h3>
-                <p className="text-xs text-sky-700">Democratizing AI knowledge & emerging technologies.</p>
-              </div>
-              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-100">
-                <h3 className="font-semibold text-emerald-800 text-sm mb-1">Vision 2030</h3>
-                <p className="text-xs text-emerald-700">Raising 3 Million AI Talents in Uganda.</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="text-xs text-slate-400 mt-8">
-            © 2025 Otic Foundation. All rights reserved.
-          </div>
+        {/* Desktop Sidebar */}
+        <div className="hidden md:flex flex-col w-1/3 glass rounded-3xl p-8">
+          <InfoPanel />
         </div>
 
+        {/* Mobile Slide-out Drawer */}
+        <AnimatePresence>
+          {isMobileMenuOpen && (
+            <>
+              {/* Backdrop */}
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="absolute inset-0 bg-slate-900/20 backdrop-blur-sm z-40 md:hidden"
+              />
+
+              {/* Drawer */}
+              <motion.div
+                initial={{ x: '-100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '-100%' }}
+                transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                className="absolute left-0 top-0 bottom-0 w-[80%] max-w-sm bg-white shadow-2xl z-50 p-6 md:hidden"
+              >
+                <button
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600"
+                >
+                  <X size={24} />
+                </button>
+                <div className="mt-8 h-full">
+                  <InfoPanel />
+                </div>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
+
         {/* Chat Area */}
-        <div className="flex-1 glass rounded-3xl overflow-hidden shadow-2xl relative">
-          <ChatInterface />
+        {/* Mobile: rounded-none. Desktop: rounded-3xl */}
+        <div className="flex-1 glass md:rounded-3xl rounded-none overflow-hidden shadow-2xl relative flex flex-col">
+          <ChatInterface onMenuClick={() => setIsMobileMenuOpen(true)} />
         </div>
 
       </div>

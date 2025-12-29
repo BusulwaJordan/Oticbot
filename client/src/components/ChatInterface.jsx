@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, User, Bot, Loader2 } from 'lucide-react';
+import { Send, Sparkles, User, Bot, Loader2, Menu } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -40,7 +40,7 @@ const MessageBubble = ({ message }) => {
     );
 };
 
-const ChatInterface = () => {
+const ChatInterface = ({ onMenuClick }) => {
     const [input, setInput] = useState('');
     const [messages, setMessages] = useState([
         { id: 1, text: "Hello! I'm the Otic Foundation AI. How can I help you today?", sender: 'bot' }
@@ -114,11 +114,19 @@ const ChatInterface = () => {
         <div className="flex flex-col h-full bg-slate-50/50">
 
             {/* Header (Mobile only) */}
-            <div className="md:hidden p-4 border-b border-white/20 bg-white/40 backdrop-blur-sm flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-sky-500 to-emerald-400 flex items-center justify-center text-white font-bold text-sm">
-                    O
+            <div className="md:hidden p-4 border-b border-white/20 bg-white/40 backdrop-blur-sm flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-sky-500 to-emerald-400 flex items-center justify-center text-white font-bold text-sm">
+                        O
+                    </div>
+                    <span className="font-semibold text-slate-800">Otic AI</span>
                 </div>
-                <span className="font-semibold text-slate-800">Otic AI</span>
+                <button
+                    onClick={onMenuClick}
+                    className="p-2 text-slate-500 hover:bg-white/50 rounded-lg transition-colors"
+                >
+                    <Menu size={20} />
+                </button>
             </div>
 
             {/* Messages Area */}
