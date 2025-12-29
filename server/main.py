@@ -226,6 +226,20 @@ async def chat(request: ChatRequest, req: Request):
     from fastapi.responses import StreamingResponse
     return StreamingResponse(generate(), media_type="text/plain")
 
+# Root endpoint (fixes 404 on Hugging Face health checks)
+@app.get("/")
+async def root():
+    return {
+        "name": "OticBot API",
+        "version": "1.0",
+        "description": "AI Assistant for the Otic Foundation",
+        "endpoints": {
+            "POST /chat": "Send a message to OticBot",
+            "GET /health": "Check API health status"
+        },
+        "guardrails": "active"
+    }
+
 # Health check endpoint
 @app.get("/health")
 async def health_check():
