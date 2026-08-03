@@ -1,9 +1,16 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
+import json
 import os
 import re
 import time
 from collections import defaultdict
+from html.parser import HTMLParser
+from pathlib import Path
+from threading import Lock
+
+import requests
 from dotenv import load_dotenv
 from groq import Groq
 
@@ -28,6 +35,7 @@ client = Groq(
 
 class ChatRequest(BaseModel):
     message: str
+    session_id: str = "default"
 
 # ============================================
 # GUARDRAILS CONFIGURATION
@@ -71,6 +79,12 @@ In the meantime, feel free to explore the Otic Foundation's mission of democrati
 
 OTIC_CONTEXT = """
 You are OticBot, the official AI assistant for the Otic Foundation.
+
+Response style rules:
+- If the user asks a simple greeting, thanks, or a very short check-in, reply briefly with 1 warm sentence and optionally 1 helpful follow-up question.
+- If the user asks about the company, programs, services, impact, training, or how to get involved, answer clearly and concisely with a short paragraph or 2-3 bullet points.
+- Do not over-explain unless the user asks for detail.
+- Keep answers professional, welcoming, and focused on Otic Foundation, Otic Academy, OIET, and AI education in Uganda.
 
 === 1. OTIC FOUNDATION (PARENT ORGANIZATION) ===
 - **Website**: https://oticfoundation.org
@@ -135,6 +149,151 @@ You are OticBot, the official AI assistant for the Otic Foundation.
 """
 
 # ============================================
+# LIVE KNOWLEDGE FETCHING + PERSISTENCE
+# ============================================
+
+KNOWLEDGE_REFRESH_INTERVAL = 1800
+KNOWLEDGE_STORE_PATH = Path(__file__).with_name("knowledge_store.json")
+knowledge_store = {}
+knowledge_lock = Lock()
+knowledge_cache = []
+knowledge_cache_timestamp = 0.0
+
+
+class TextExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"script", "style", "noscript"}:
+            self.skip_depth += 1
+        elif tag in {"p", "div", "section", "article", "li", "ul", "ol", "tr", "h1", "h2", "h3", "h4", "br"}:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in {"script", "style", "noscript"} and self.skip_depth > 0:
+            self.skip_depth -= 1
+        elif tag in {"p", "div", "section", "article", "li", "ul", "ol", "tr", "h1", "h2", "h3", "h4"}:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if self.skip_depth == 0:
+            text = data.strip()
+            if text:
+                self.parts.append(text)
+
+    def get_text(self):
+        return " ".join(part.strip() for part in self.parts if part and part.strip())
+
+
+def load_knowledge_store() -> dict:
+    global knowledge_store
+    if knowledge_store:
+        return knowledge_store
+    if KNOWLEDGE_STORE_PATH.exists():
+        try:
+            loaded = json.loads(KNOWLEDGE_STORE_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                knowledge_store = loaded
+                return knowledge_store
+        except Exception:
+            pass
+    knowledge_store = {}
+    return knowledge_store
+
+
+def persist_knowledge(existing: dict, fresh_pages: dict) -> dict:
+    global knowledge_store
+    merged = dict(existing or {})
+    for url, data in fresh_pages.items():
+        if not data.get("content"):
+            continue
+        prior = merged.get(url, {})
+        merged[url] = {
+            **prior,
+            **data,
+            "content": data.get("content", prior.get("content", "")),
+            "title": data.get("title", prior.get("title", "")),
+            "name": data.get("name", prior.get("name", url)),
+            "fetched_at": data.get("fetched_at", prior.get("fetched_at", int(time.time()))),
+        }
+    KNOWLEDGE_STORE_PATH.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+    knowledge_store = merged
+    return merged
+
+
+def extract_title(html: str) -> str:
+    match = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        return re.sub(r"\s+", " ", re.sub(r"<.*?>", " ", match.group(1))).strip()
+    return ""
+
+
+def extract_text_from_html(html: str) -> str:
+    parser = TextExtractor()
+    parser.feed(html)
+    parser.close()
+    text = parser.get_text()
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def fetch_live_knowledge() -> dict:
+    sources = [
+        {"name": "Otic Foundation", "url": "https://oticfoundation.org"},
+        {"name": "Otic Academy", "url": "https://academy.oticfoundation.org"},
+        {"name": "OIET", "url": "https://oiet.ac.ug"},
+    ]
+    fresh_pages = {}
+    for source in sources:
+        try:
+            response = requests.get(source["url"], timeout=12, headers={"User-Agent": "Mozilla/5.0"})
+            response.raise_for_status()
+            html = response.text
+            content = extract_text_from_html(html)
+            snippet = content[:4000]
+            if len(snippet) < 120:
+                continue
+            fresh_pages[source["url"]] = {
+                "name": source["name"],
+                "title": extract_title(html) or source["name"],
+                "content": snippet,
+                "fetched_at": int(time.time()),
+            }
+        except Exception:
+            continue
+    return fresh_pages
+
+
+def build_live_knowledge_context() -> str:
+    global knowledge_cache, knowledge_cache_timestamp
+    now = time.time()
+    if now - knowledge_cache_timestamp < KNOWLEDGE_REFRESH_INTERVAL:
+        return "\n\n".join(knowledge_cache)
+
+    with knowledge_lock:
+        if now - knowledge_cache_timestamp < KNOWLEDGE_REFRESH_INTERVAL:
+            return "\n\n".join(knowledge_cache)
+
+        store = load_knowledge_store()
+        fresh_pages = fetch_live_knowledge()
+        updated_store = persist_knowledge(store, fresh_pages)
+
+        knowledge_items = []
+        for url, page in updated_store.items():
+            if page.get("content"):
+                summary = page.get("content", "")[:1400]
+                knowledge_items.append(
+                    f"Source: {page.get('name', url)} ({url})\nTitle: {page.get('title', 'Untitled')}\nSummary: {summary}"
+                )
+
+        knowledge_cache = knowledge_items
+        knowledge_cache_timestamp = now
+        return "\n\n".join(knowledge_items)
+
+
+# ============================================
 # GUARDRAIL FUNCTIONS
 # ============================================
 
@@ -161,6 +320,19 @@ def contains_blocked_content(message: str) -> bool:
             return True
     return False
 
+def determine_response_style(message: str) -> str:
+    text = (message or "").strip().lower()
+    if not text:
+        return "brief"
+
+    short_greeting = any(token in text for token in ["hello", "hi", "hey", "thanks", "thank you", "good morning", "good afternoon", "good evening"])
+    if short_greeting and len(text.split()) <= 4:
+        return "brief"
+    if any(keyword in text for keyword in ["tell me about", "what is", "who are you", "what does", "how does", "program", "academy", "institute", "services", "impact", "mission", "vision", "contact", "join", "partner", "about the company"]):
+        return "detailed"
+    return "brief"
+
+
 def truncate_response(text: str, max_length: int = MAX_RESPONSE_LENGTH) -> str:
     """Truncate response to maximum length, ending at a sentence if possible."""
     if len(text) <= max_length:
@@ -181,87 +353,71 @@ def truncate_response(text: str, max_length: int = MAX_RESPONSE_LENGTH) -> str:
     return truncated
 
 # ============================================
-# CHAT ENDPOINT WITH GUARDRAILS
-# ============================================
-
-# ============================================
 # CHAT ENDPOINT WITH MEMORY & GUARDRAILS
 # ============================================
 
-# In-memory history store: session_id -> list of messages
-# Format: {"role": "user/assistant", "content": "..."}
 conversation_history = defaultdict(list)
-MAX_HISTORY_MESSAGES = 10  # Keep last 10 messages (5 turns)
-
-class ChatRequest(BaseModel):
-    message: str
-    session_id: str = "default"  # Optional session ID for memory
+MAX_HISTORY_MESSAGES = 10
 
 @app.post("/chat")
 async def chat(request: ChatRequest, req: Request):
-    # Get client IP for rate limiting
     client_ip = req.client.host if req.client else "unknown"
-    
-    # GUARDRAIL 1: Rate Limiting
+
     if check_rate_limit(client_ip):
-        from fastapi.responses import PlainTextResponse
         return PlainTextResponse(RATE_LIMIT_RESPONSE)
-    
-    # GUARDRAIL 2: Keyword Filter
+
     if contains_blocked_content(request.message):
-        from fastapi.responses import PlainTextResponse
         return PlainTextResponse(BLOCKED_RESPONSE)
-    
-    # GUARDRAIL 3: Empty/Too Short Message
+
     if len(request.message.strip()) < 2:
-        from fastapi.responses import PlainTextResponse
         return PlainTextResponse("Please type a message to get started! Ask me anything about the Otic Foundation. 😊")
-    
-    # MEMORY: Retrieve and update history
+
     session_id = request.session_id
     history = conversation_history[session_id]
-    
-    # Append user message
     history.append({"role": "user", "content": request.message})
-    
-    # Trim history if too long
+
     if len(history) > MAX_HISTORY_MESSAGES:
         history = history[-MAX_HISTORY_MESSAGES:]
         conversation_history[session_id] = history
 
+    live_knowledge = build_live_knowledge_context()
+    response_style = determine_response_style(request.message)
+    system_prompt = OTIC_CONTEXT
+    if live_knowledge:
+        system_prompt = f"{OTIC_CONTEXT}\n\nLatest website knowledge fetched from Otic sites:\n{live_knowledge}"
+    if response_style == "brief":
+        system_prompt = f"{system_prompt}\n\nStyle override: keep the reply short, friendly, and polished."
+    else:
+        system_prompt = f"{system_prompt}\n\nStyle override: answer clearly and concisely, with enough detail for the question asked, and keep the tone professional and welcoming."
+
     async def generate():
         try:
             full_response = ""
-            
-            # Construct messages with system prompt + history
-            messages = [{"role": "system", "content": OTIC_CONTEXT}] + history
-            
+            messages = [{"role": "system", "content": system_prompt}] + history
+
             stream = client.chat.completions.create(
                 messages=messages,
                 model="llama-3.3-70b-versatile",
                 stream=True,
-                max_tokens=1024,  # Increased from 500 to flow better
+                max_tokens=1024,
                 temperature=0.7,
             )
 
             for chunk in stream:
-                # CHECK FOR DISCONNECT (Stop generating if user leaves)
                 if await req.is_disconnected():
                     break
-                    
+
                 if chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     full_response += content
                     yield content
 
-            # Memory: Append assistant response after generation
             if full_response:
                 conversation_history[session_id].append({"role": "assistant", "content": full_response})
 
         except Exception as e:
             yield f"I'm having trouble responding right now. Please try again. (Error: {str(e)})"
 
-    from fastapi.responses import StreamingResponse
     return StreamingResponse(generate(), media_type="text/plain")
 
 # Root endpoint (fixes 404 on Hugging Face health checks)
@@ -273,15 +429,28 @@ async def root():
         "description": "AI Assistant for the Otic Foundation",
         "endpoints": {
             "POST /chat": "Send a message to OticBot",
-            "GET /health": "Check API health status"
+            "GET /health": "Check API health status",
+            "POST /refresh-knowledge": "Fetch and persist the latest Otic site content"
         },
-        "guardrails": "active"
+        "guardrails": "active",
+        "live_knowledge": "enabled"
     }
 
 # Health check endpoint
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "guardrails": "active"}
+    return {"status": "healthy", "guardrails": "active", "live_knowledge": "enabled"}
+
+@app.post("/refresh-knowledge")
+async def refresh_knowledge():
+    fresh_pages = fetch_live_knowledge()
+    updated_store = persist_knowledge(load_knowledge_store(), fresh_pages)
+    return {
+        "status": "ok",
+        "fetched": len(fresh_pages),
+        "stored": len(updated_store),
+        "sources": list(updated_store.keys())
+    }
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,5 +1,6 @@
-fastapi
-uvicorn
-requests
-groq
-python-dotenv
+fastapi>=0.110,<0.111
+uvicorn>=0.29,<0.30
+requests>=2.32,<3
+groq>=0.9,<0.10
+python-dotenv>=1.0,<2
+pydantic>=2.7,<2.8
