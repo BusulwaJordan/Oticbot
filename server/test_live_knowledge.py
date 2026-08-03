@@ -89,3 +89,13 @@ def test_refresh_knowledge_deduplicates_and_updates():
 def test_simple_greetings_use_brief_style():
     assert module.determine_response_style("hello") == "brief"
     assert module.determine_response_style("can you tell me about the company") == "detailed"
+
+
+def test_company_scope_guardrail_allows_only_otic_topics():
+    assert module.is_company_related("What courses does Otic Academy offer?")
+    assert module.is_company_related("How can I partner with the Otic Foundation?")
+    assert module.is_company_related("What courses do you offer?")
+    assert module.is_company_related("hello")
+    assert not module.is_company_related("Explain quantum mechanics")
+    assert not module.is_company_related("What is artificial intelligence?")
+    assert not module.is_company_related("Write a Python web scraper")
