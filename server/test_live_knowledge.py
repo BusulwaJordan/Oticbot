@@ -97,5 +97,5 @@ def test_company_scope_guardrail_allows_only_otic_topics():
     assert module.is_company_related("What courses do you offer?")
     assert module.is_company_related("hello")
     assert not module.is_company_related("Explain quantum mechanics")
-    assert not module.is_company_related("What is artificial intelligence?")
+    assert module.is_company_related("What is AI in every city and in which area of Uganda are they now?")
     assert not module.is_company_related("Write a Python web scraper")

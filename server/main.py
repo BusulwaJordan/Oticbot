@@ -69,6 +69,18 @@ COMPANY_INTENT_PHRASES = (
     "how do i register", "how much do you charge",
 )
 
+COMPANY_CAMPAIGN_PHRASES = (
+    "ai in every city", "regional hubs", "regional hub",
+    "ai education", "ai education initiatives", "artificial intelligence education",
+    "ai in uganda", "uganda ai", "ugandan ai", "ai cities", "ai city",
+)
+
+COMPANY_LOCATION_KEYWORDS = (
+    "uganda", "ugandan", "kampala", "nakawa", "soroti", "kabale",
+    "muni", "arua", "city", "cities", "region", "regional", "area",
+    "areas", "district", "town", "hubs", "hub",
+)
+
 GREETING_WORDS = {
     "hello", "hi", "hey", "thanks", "thank you", "good morning",
     "good afternoon", "good evening",
@@ -362,10 +374,18 @@ def is_greeting(message: str) -> bool:
 def is_company_related(message: str) -> bool:
     """Return whether a message is within OticBot's allowed subject area."""
     normalized = re.sub(r"\s+", " ", (message or "").lower()).strip()
+    if is_greeting(normalized):
+        return True
+
+    has_ai_keyword = bool(re.search(r"\b(ai|artificial intelligence)\b", normalized))
+    has_location_keyword = any(keyword in normalized for keyword in COMPANY_LOCATION_KEYWORDS)
+    has_campaign_phrase = any(phrase in normalized for phrase in COMPANY_CAMPAIGN_PHRASES)
+
     return (
-        is_greeting(normalized)
-        or any(identifier in normalized for identifier in COMPANY_IDENTIFIERS)
+        any(identifier in normalized for identifier in COMPANY_IDENTIFIERS)
         or any(phrase in normalized for phrase in COMPANY_INTENT_PHRASES)
+        or has_campaign_phrase
+        or (has_ai_keyword and has_location_keyword)
     )
 
 def determine_response_style(message: str) -> str:
